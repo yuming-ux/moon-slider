@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>月齢と月の見え方</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0b0d13;color:#f1f1f1;font-family:-apple-system,BlinkMacSystemFont,"Noto Sans JP","Hiragino Kaku Gothic ProN",sans-serif}
+.wrap{max-width:980px;margin:auto;padding:16px}
+h1{font-size:22px;margin:0 0 5px}.sub{font-size:13px;color:#aeb2bd;margin-bottom:14px;line-height:1.6}
+canvas{width:100%;height:auto;display:block;border-radius:16px;background:#05070d}
+.panel{background:#181b22;border:1px solid #292d37;border-radius:15px;padding:14px;margin-top:12px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{background:#20232b;border-radius:11px;padding:11px}
+.label{font-size:11px;color:#9da2ad}.value{font-size:19px;font-weight:700;margin-top:3px}
+input[type=range]{width:100%;accent-color:#ddd;margin:15px 0}
+button{border:0;border-radius:22px;padding:10px 17px;font-size:15px;background:#eee;color:#111}
+button.secondary{background:#30343d;color:#eee}.buttons{display:flex;gap:8px;flex-wrap:wrap}
+.info{font-size:13px;line-height:1.75;color:#c8cbd2}
+@media(max-width:700px){.grid{grid-template-columns:1fr 1fr}}
+@media(max-width:430px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>☀️🌍🌙 月齢と月の見え方</h1>
+<div class="sub">月の公転・地球の自転・観測者から見た月の高さを、ひとつの時間軸で動かせます。</div>
+
+<canvas id="cv" width="960" height="650"></canvas>
+
+<div class="panel">
+<div class="grid">
+<div class="stat"><div class="label">月齢</div><div class="value" id="age">0.00日</div></div>
+<div class="stat"><div class="label">月相</div><div class="value" id="phase">🌑 新月</div></div>
+<div class="stat"><div class="label">時刻</div><div class="value" id="clock">12:00</div></div>
+<div class="stat"><div class="label">月の状態</div><div class="value" id="rise">地平線下</div></div>
+</div>
+<input id="slider" type="range" min="0" max="29.53" step="0.002" value="0">
+<div class="buttons">
+<button id="play">▶︎ 自動再生</button><button class="secondary" id="day">＋1日</button><button class="secondary" id="reset">↺ 新月へ</button>
+</div>
+</div>
+
+<div class="panel info">
+<b>右側の月が「実際に見える月」です。</b><br>
+スライダーを動かすと、🌑新月 → 🌒 → 🌓上弦 → 🌔 → 🌕満月 → 🌖 → 🌗下弦 → 🌘 → 🌑 と、月の形そのものが変化します。
+</div>
+</div>
+
+<script>
+const cv=document.getElementById("cv"),ctx=cv.getContext("2d");
+const slider=document.getElementById("slider");
+const ageEl=document.getElementById("age"),phaseEl=document.getElementById("phase"),clockEl=document.getElementById("clock"),riseEl=document.getElementById("rise");
+let playing=false,last=performance.now(),TAU=Math.PI*2,L=29.53059;
+
+function phase(a){
+ const f=(a/L)%1;
+ if(f<.0625||f>=.9375)return["🌑","新月"];
+ if(f<.1875)return["🌒","細い月"];
+ if(f<.3125)return["🌓","上弦"];
+ if(f<.4375)return["🌔","満ちていく月"];
+ if(f<.5625)return["🌕","満月"];
+ if(f<.6875)return["🌖","欠けていく月"];
+ if(f<.8125)return["🌗","下弦"];
+ return["🌘","細い月"];
+}
+
+/* 正しい月相を描く。
+   0=新月、0.25=上弦、0.5=満月、0.75=下弦、1=新月 */
+function drawMoon(x,y,r,f){
+ f=((f%1)+1)%1;
+ ctx.save();
+
+ // 月面の暗い部分
+ ctx.beginPath();ctx.arc(x,y,r,0,TAU);ctx.fillStyle="#151820";ctx.fill();
+
+ // まず「満ちていく側」の半月を作り、そこへ影の楕円を重ねる。
+ // 0〜0.5 は右側が明るくなる。
+ function waxing(g){
+   const k=Math.cos(TAU*g);
+   ctx.beginPath();
+   ctx.arc(x,y,r,-Math.PI/2,Math.PI/2); // 外周の右半分
+   ctx.ellipse(x+k*r,y,Math.abs(k)*r,r,0,Math.PI/2,Math.PI*1.5);
+   ctx.closePath();
+   ctx.fillStyle="#e7e7e2";ctx.fill();
+ }
+ if(f<=0.5){
+   waxing(f);
+ }else{
+   // 欠けていく月は、満ちていく月を左右反転して描く
+   ctx.save();
+   ctx.translate(2*x,0);ctx.scale(-1,1);
+   waxing(1-f);
+   ctx.restore();
+ }
+
+ // 輪郭と少しだけ月面の質感
+ ctx.beginPath();ctx.arc(x,y,r,0,TAU);ctx.strokeStyle="#858992";ctx.lineWidth=1.4;ctx.stroke();
+ ctx.restore();
+}
+
+function drawSky(x,y,w,h,moonAlt,az,f){
+ ctx.strokeStyle="#343944";ctx.lineWidth=1;ctx.strokeRect(x,y,w,h);
+ const horizon=y+h*.70;
+ ctx.strokeStyle="#707580";ctx.beginPath();ctx.moveTo(x,horizon);ctx.lineTo(x+w,horizon);ctx.stroke();
+ ctx.fillStyle="#11151b";ctx.fillRect(x,horizon,w,h*.30);
+
+ ctx.fillStyle="#aeb2bd";ctx.font="13px system-ui";
+ ctx.fillText("東",x+18,horizon+23);ctx.fillText("南",x+w/2-5,horizon+23);ctx.fillText("西",x+w-28,horizon+23);
+ for(let i=1;i<=2;i++){let yy=horizon-i*(h*.70/3);ctx.strokeStyle="#252a33";ctx.beginPath();ctx.moveTo(x,yy);ctx.lineTo(x+w,yy);ctx.stroke()}
+
+ // 月の軌道を薄い弧で表示
+ ctx.strokeStyle="#343943";ctx.setLineDash([4,5]);
+ ctx.beginPath();ctx.ellipse(x+w/2,horizon,w*.40,h*.52,0,Math.PI,TAU);ctx.stroke();
+ ctx.setLineDash([]);
+
+ const px=x+w*(.08+.84*az);
+ const py=horizon-Math.max(0,moonAlt)*(h*.53);
+
+ if(moonAlt>0.015){
+   // 大きめに描くので、月相の変化がはっきり分かる
+   drawMoon(px,py,42,f);
+ }else{
+   ctx.setLineDash([5,5]);ctx.strokeStyle="#60656e";
+   ctx.beginPath();ctx.arc(px,horizon+35,42,0,TAU);ctx.stroke();ctx.setLineDash([]);
+ }
+}
+
+function draw(){
+ const t=+slider.value,f=t/L,dayFrac=t%1;
+ const hours=(12+dayFrac*24)%24;
+ const hh=Math.floor(hours),mm=Math.floor((hours-hh)*60);
+
+ const W=cv.width,H=cv.height;
+ ctx.clearRect(0,0,W,H);ctx.fillStyle="#05070d";ctx.fillRect(0,0,W,H);
+
+ // 左：宇宙から見た位置関係
+ const sx=115,sy=225;
+ const sg=ctx.createRadialGradient(sx,sy,4,sx,sy,50);
+ sg.addColorStop(0,"#fff6a7");sg.addColorStop(1,"#e2a728");
+ ctx.fillStyle=sg;ctx.beginPath();ctx.arc(sx,sy,44,0,TAU);ctx.fill();
+ ctx.fillStyle="#eee";ctx.font="15px system-ui";ctx.fillText("太陽",sx-18,sy+70);
+
+ const ex=330,ey=225,er=54;
+ ctx.strokeStyle="#40444e";ctx.beginPath();ctx.arc(ex,ey,132,0,TAU);ctx.stroke();
+ ctx.fillStyle="#467eb9";ctx.beginPath();ctx.arc(ex,ey,er,0,TAU);ctx.fill();
+ ctx.fillStyle="#67965e";ctx.beginPath();ctx.ellipse(ex-17,ey-10,20,12,.25,0,TAU);ctx.fill();
+ ctx.beginPath();ctx.ellipse(ex+18,ey+19,16,9,-.45,0,TAU);ctx.fill();
+
+ const obsAng=-Math.PI/2+dayFrac*TAU,ox=ex+er*Math.cos(obsAng),oy=ey+er*Math.sin(obsAng);
+ ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(ox,oy,6,0,TAU);ctx.fill();
+ ctx.fillStyle="#bbb";ctx.font="12px system-ui";ctx.fillText("観測者",ox+9,oy+4);
+ ctx.strokeStyle="#aeb2bd";ctx.beginPath();ctx.arc(ex,ey,er+14,-.9,1.8);ctx.stroke();
+ ctx.fillText("地球の自転 24時間",ex-52,ey-er-30);
+
+ const ma=TAU*f,mx=ex+132*Math.cos(ma),my=ey+132*Math.sin(ma);
+ drawMoon(mx,my,29,f);
+ ctx.fillStyle="#eee";ctx.fillText("月",mx-8,my+52);
+
+ ctx.setLineDash([5,7]);ctx.strokeStyle="#76663a";
+ for(let i=-2;i<=2;i++){ctx.beginPath();ctx.moveTo(sx+46,sy+i*15);ctx.lineTo(ex-58,ey+i*20);ctx.stroke()}
+ ctx.setLineDash([]);
+ ctx.fillStyle="#aaa";ctx.font="12px system-ui";ctx.fillText("宇宙から見た位置関係",30,410);
+
+ // 右：観測者から見た空
+ const skyX=535,skyY=45,skyW=395,skyH=370;
+ // 月が南中する時刻：新月12時、上弦18時、満月0時、下弦6時
+ const transit=(12+f*24)%24;
+ let ha=(hours-transit+12)%24-12;
+ const alt=Math.sin((1-Math.abs(ha)/12)*Math.PI/2);
+ const visible=alt>0.015,az=(ha+12)/24;
+
+ drawSky(skyX,skyY,skyW,skyH,visible?alt:-1,az,f);
+
+ ctx.fillStyle="#eee";ctx.font="14px system-ui";ctx.fillText("観測者から見た空",skyX+14,skyY+25);
+ ctx.fillStyle="#b9bdc6";ctx.font="12px system-ui";
+ if(!visible)ctx.fillText("月は地平線の下",skyX+14,skyY+48);
+ else if(ha<-.15)ctx.fillText("月は東から昇っている",skyX+14,skyY+48);
+ else if(ha>.15)ctx.fillText("月は西へ沈みつつある",skyX+14,skyY+48);
+ else ctx.fillText("月は南中付近",skyX+14,skyY+48);
+
+ // 右側の大きな「見えている月」
+ const bx=730,by=535;
+ ctx.fillStyle="#e9e9e5";ctx.font="13px system-ui";ctx.fillText("いま見えている月",bx-70,by-92);
+ drawMoon(bx,by,68,f);
+ const [emoji,name]=phase(t);
+ ctx.fillStyle="#eee";ctx.font="17px system-ui";ctx.fillText(emoji+" "+name,bx-45,by+95);
+
+ ageEl.textContent=t.toFixed(2)+"日";phaseEl.textContent=emoji+" "+name;
+ clockEl.textContent=String(hh).padStart(2,"0")+":"+String(mm).padStart(2,"0");
+ if(!visible)riseEl.textContent="地平線下";
+ else if(Math.abs(ha)<.7)riseEl.textContent="南中付近";
+ else if(ha<0)riseEl.textContent="昇っている";
+ else riseEl.textContent="沈んでいる";
+}
+
+function loop(now){
+ if(playing){const dt=(now-last)/1000;slider.value=(+slider.value+dt*1.25)%L;draw()}
+ last=now;requestAnimationFrame(loop);
+}
+slider.oninput=draw;
+document.getElementById("play").onclick=()=>{playing=!playing;document.getElementById("play").textContent=playing?"⏸︎ 停止":"▶︎ 自動再生";last=performance.now()};
+document.getElementById("day").onclick=()=>{slider.value=Math.min(L,+slider.value+1);draw()};
+document.getElementById("reset").onclick=()=>{playing=false;document.getElementById("play").textContent="▶︎ 自動再生";slider.value=0;draw()};
+draw();requestAnimationFrame(loop);
+</script>
+</body>
+</html>
